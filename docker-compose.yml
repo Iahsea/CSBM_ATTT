@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  # MySQL Database
+  mysql:
+    image: mysql:8.0
+    container_name: csat_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: user_db
+      MYSQL_USER: csat_user
+      MYSQL_PASSWORD: csat_pass
+      TZ: 'UTC'
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./setup.sql:/docker-entrypoint-initdb.d/01-setup.sql
+    networks:
+      - csat_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: csat_backend
+    environment:
+      DATABASE_USER: root
+      DATABASE_PASSWORD: 123456
+      DATABASE_HOST: mysql
+      DATABASE_PORT: 3306
+      DATABASE_NAME: user_db
+      HOST: 0.0.0.0
+      PORT: 8000
+      ENV: production
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - csat_network
+    restart: unless-stopped
+    command: python main.py
+
+volumes:
+  mysql_data:
+
+networks:
+  csat_network:
+    driver: bridge
