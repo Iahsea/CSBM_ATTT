@@ -8,7 +8,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from .models import User, Role
 from .schemas import UserCreate, UserUpdate
-from .security import encrypt, decrypt, generate_key, apply_masking, mask_email, mask_phone, get_master_key
+from .security import (
+    encrypt,
+    decrypt,
+    generate_key,
+    apply_masking,
+    mask_email,
+    mask_phone,
+    get_master_key,
+)
 from datetime import datetime
 import base64
 
@@ -140,13 +148,14 @@ class UserCRUD:
             if not db_role:
                 raise ValueError(f"Role '{user.role}' does not exist")
             
-            # Generate encryption key
-            key = generate_key(user.username, user.password)
+            # Generate keys
+            per_user_key = generate_key(user.username, user.password)
+            master_key = get_master_key()
             
             # Encrypt sensitive fields
-            encrypted_email = encrypt(user.email, key)
-            encrypted_phone = encrypt(user.phone, key)
-            encrypted_password = encrypt(user.password, key)
+            encrypted_email = encrypt(user.email, master_key)
+            encrypted_phone = encrypt(user.phone, master_key)
+            encrypted_password = encrypt(user.password, per_user_key)
             
             # Create user instance
             db_user = User(
@@ -272,47 +281,47 @@ class UserCRUD:
         if not db_user:
             raise ValueError(f"User with ID {user_id} does not exist")
         
+        master_key = get_master_key()
+        
         # Nếu update password, cần verify old_password
         if user_update.password:
             if not old_password:
                 raise ValueError("old_password is required to update password")
             
-            # Verify old password
+            # Verify old password using per-user key
             old_key = generate_key(username, old_password)
             try:
                 decrypted_old_password = decrypt(db_user.password, old_key)
-            except:
+            except Exception:
                 raise ValueError("Invalid old password")
             
             if decrypted_old_password != old_password:
                 raise ValueError("Invalid old password")
             
-            # Update password với new key
+            # Update password với new per-user key
             new_key = generate_key(username, user_update.password)
             db_user.password = encrypt(user_update.password, new_key)
             
-            # Re-encrypt email & phone với new key
+            # Ensure email/phone are stored with master key (migrate if needed)
             if db_user.email:
-                decrypted_email = decrypt(db_user.email, old_key)
-                db_user.email = encrypt(decrypted_email, new_key)
+                try:
+                    decrypted_email = decrypt(db_user.email, master_key)
+                except Exception:
+                    decrypted_email = decrypt(db_user.email, old_key)
+                db_user.email = encrypt(decrypted_email, master_key)
             
             if db_user.phone:
-                decrypted_phone = decrypt(db_user.phone, old_key)
-                db_user.phone = encrypt(decrypted_phone, new_key)
+                try:
+                    decrypted_phone = decrypt(db_user.phone, master_key)
+                except Exception:
+                    decrypted_phone = decrypt(db_user.phone, old_key)
+                db_user.phone = encrypt(decrypted_phone, master_key)
         else:
-            # Không update password, dùng current key để update email/phone
-            current_key = generate_key(username, old_password) if old_password else None
-            
-            if user_update.email and current_key:
-                db_user.email = encrypt(user_update.email, current_key)
-            elif user_update.email:
-                # Không có key để encrypt, raise error
-                raise ValueError("Password is required to update email/phone")
-            
-            if user_update.phone and current_key:
-                db_user.phone = encrypt(user_update.phone, current_key)
-            elif user_update.phone:
-                raise ValueError("Password is required to update email/phone")
+            # Không update password
+            if user_update.email:
+                db_user.email = encrypt(user_update.email, master_key)
+            if user_update.phone:
+                db_user.phone = encrypt(user_update.phone, master_key)
         
         db_user.updated_at = datetime.utcnow()
         
@@ -687,18 +696,86 @@ def decrypt_user_data(user: User, username: str, password: str) -> dict:
     Returns:
         dict: User data (decrypted)
     """
-    key = generate_key(username, password)
-    print(f"🔑 Generated key for decryption: {key}")
+    master_key = get_master_key()
+    per_user_key = generate_key(username, password)
     
-    decrypted_email = decrypt(user.email, key) if user.email else None
-    decrypted_phone = decrypt(user.phone, key) if user.phone else None
-    decrypted_password = decrypt(user.password, key) if user.password else None
+    # Email/phone ưu tiên decrypt bằng master key (dữ liệu mới).
+    # Nếu fail/ra chuỗi không hợp lệ, fallback per-user key để phục vụ migration.
+    def _safe_decrypt(data: bytes, primary_key: bytes, fallback_key: bytes) -> str | None:
+        if not data:
+            return None
+        try:
+            return decrypt(data, primary_key)
+        except Exception:
+            try:
+                return decrypt(data, fallback_key)
+            except Exception:
+                return None
+    
+    decrypted_email = _safe_decrypt(user.email, master_key, per_user_key)
+    decrypted_phone = _safe_decrypt(user.phone, master_key, per_user_key)
+    decrypted_password = decrypt(user.password, per_user_key) if user.password else None
     
     return {
         "email": decrypted_email,
         "phone": decrypted_phone,
         "password": decrypted_password
     }
+
+
+async def migrate_user_to_master_key(db: AsyncSession, user: User, username: str, password: str) -> bool:
+    """
+    Re-encrypt email/phone bằng master key. Cần password để lấy per-user key
+    nếu dữ liệu còn dạng cũ.
+    Trả về True nếu có thay đổi.
+    """
+    master_key = get_master_key()
+    per_user_key = generate_key(username, password)
+
+    def looks_like_email(value: str | None) -> bool:
+        return bool(value) and "@" in value
+
+    def looks_like_phone(value: str | None) -> bool:
+        if not value:
+            return False
+        digits = ''.join(c for c in value if c.isdigit() or c == '+')
+        return len(digits) >= 4
+
+    changed = False
+
+    # Try decrypt with master key first
+    try:
+        email_master = decrypt(user.email, master_key) if user.email else None
+        phone_master = decrypt(user.phone, master_key) if user.phone else None
+    except Exception:
+        email_master = None
+        phone_master = None
+
+    already_master = looks_like_email(email_master) or looks_like_phone(phone_master)
+    if already_master:
+        return False
+
+    # Fallback decrypt with per-user key
+    try:
+        email_old = decrypt(user.email, per_user_key) if user.email else None
+        phone_old = decrypt(user.phone, per_user_key) if user.phone else None
+    except Exception:
+        email_old = None
+        phone_old = None
+
+    if email_old:
+        user.email = encrypt(email_old, master_key)
+        changed = True
+    if phone_old:
+        user.phone = encrypt(phone_old, master_key)
+        changed = True
+
+    if changed:
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+
+    return changed
 
 
 def get_user_response(user: User, decrypted_data: dict = None, mask: bool = True) -> dict:
