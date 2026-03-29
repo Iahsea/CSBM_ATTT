@@ -62,6 +62,7 @@ async def create_user(
         
         # Decrypt để hiển thị
         decrypted_data = decrypt_user_data(db_user, user.username, user.password)
+        print(f"Decrypted data for new user: {decrypted_data}")
         
         # Apply masking
         user_response = get_user_response(db_user, decrypted_data, mask=True)

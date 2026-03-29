@@ -688,6 +688,7 @@ def decrypt_user_data(user: User, username: str, password: str) -> dict:
         dict: User data (decrypted)
     """
     key = generate_key(username, password)
+    print(f"🔑 Generated key for decryption: {key}")
     
     decrypted_email = decrypt(user.email, key) if user.email else None
     decrypted_phone = decrypt(user.phone, key) if user.phone else None
