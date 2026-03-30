@@ -94,6 +94,25 @@ class ResetPasswordRequest(BaseModel):
         }
 
 
+class MaskingModeRequest(BaseModel):
+    """Schema cho request set masking mode toàn cục theo role."""
+    role: str = Field(default="user", description="Role áp dụng (mặc định: user)")
+    masking_mode: str = Field(..., description="Masking mode: mask|shuffle|fake|noise")
+
+    class Config:
+        example = {
+            "role": "user",
+            "masking_mode": "shuffle"
+        }
+
+
+class MaskingModeResponse(BaseModel):
+    """Schema cho response khi set/get masking mode toàn cục."""
+    role: str
+    masking_mode: str
+    updated_at: Optional[datetime] = None
+
+
 # ==================== Response Schemas ====================
 
 class UserResponse(BaseModel):

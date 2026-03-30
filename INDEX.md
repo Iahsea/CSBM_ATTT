@@ -35,6 +35,13 @@
 - **[docs/SECURITY.md](docs/SECURITY.md)** - Encryption algorithm details
 - **[docs/DATA_MASKING.md](docs/DATA_MASKING.md)** - Masking rules
 
+### 🟢 Features (New & Important)
+- **[MASKING_MODES_INDEX.md](MASKING_MODES_INDEX.md)** - 📍 Data Masking Modes feature documentation hub
+  - **[MASKING_QUICK_START.md](MASKING_QUICK_START.md)** - 5-min setup for masking modes
+  - **[MASKING_MODE_GUIDE.md](MASKING_MODE_GUIDE.md)** - User guide (admin & users)
+  - **[MASKING_MODE_IMPLEMENTATION.md](MASKING_MODE_IMPLEMENTATION.md)** - Technical details
+  - **[DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md)** - Pre/post-deployment validation
+
 ### 🔴 Troubleshooting (When Things Break)
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Common issues & solutions
 - **[QUICK_START.md](QUICK_START.md#-common-issues)** - Quick fixes

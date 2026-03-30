@@ -8,7 +8,7 @@ from datetime import datetime
 
 from ..database import get_db
 from ..models import User
-from ..security import encrypt, get_master_key
+from ..security import encrypt, decrypt, apply_masking, get_master_key
 from ..schemas import (
     UserCreate,
     UserUpdate,
@@ -19,11 +19,57 @@ from ..schemas import (
     UserListResponse,
     ErrorResponse,
     DecryptUserDataRequest,
-    ResetPasswordRequest
+    ResetPasswordRequest,
+    MaskingModeRequest,
+    MaskingModeResponse,
 )
-from ..crud import UserCRUD, decrypt_user_data, get_user_response, get_role_based_response, get_role_based_response_from_model, to_user_response, to_user_response_for_admin, to_user_response_for_admin_decrypted
+from ..crud import (
+    UserCRUD,
+    MaskingModeCRUD,
+    decrypt_user_data,
+    get_user_response,
+    get_role_based_response,
+    get_role_based_response_from_model,
+    to_user_response,
+    to_user_response_for_admin,
+    to_user_response_for_admin_decrypted,
+)
 from ..jwt_config import TokenData
 from ..dependencies import get_current_user, get_current_admin
+
+
+def _user_response_with_masking(user: User, mask_mode: str | None) -> dict:
+    """
+    Helper to apply masking with selected mode (global per-role).
+    Decrypts email/phone with MASTER_KEY and applies provided masking mode.
+    """
+    mode = mask_mode or "mask"
+    master_key = get_master_key()
+
+    # Try to decrypt email/phone with master key
+    try:
+        decrypted_email = decrypt(user.email, master_key) if user.email else "***@***"
+        decrypted_phone = decrypt(user.phone, master_key) if user.phone else "****"
+    except Exception:
+        decrypted_email = "***@***"
+        decrypted_phone = "****"
+
+    user_data = {"email": decrypted_email, "phone": decrypted_phone, "password": "***"}
+
+    try:
+        masked_data = apply_masking(user_data, mask=True, mode=mode)
+    except Exception:
+        masked_data = user_data
+
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": masked_data.get("email", "***@***"),
+        "phone": masked_data.get("phone", "****"),
+        "role": user.role.name if user.role else "user",
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "updated_at": user.updated_at.isoformat() if user.updated_at else None,
+    }
 
 router = APIRouter(
     prefix="/users",
@@ -57,17 +103,16 @@ async def create_user(
     Response sẽ có masking áp dụng.
     """
     try:
-        # Tạo user
         db_user = await UserCRUD.create_user(db, user)
-        
+
         # Decrypt để hiển thị
         decrypted_data = decrypt_user_data(db_user, user.username, user.password)
-        print(f"Decrypted data for new user: {decrypted_data}")
-        
-        # Apply masking
-        user_response = get_user_response(db_user, decrypted_data, mask=True)
+
+        # Apply masking theo global mode của role mới tạo
+        mode = await MaskingModeCRUD.get_mode_for_role(db, user.role)
+        user_response = get_user_response(db_user, decrypted_data, mask=True, mask_mode=mode)
         user_response["message"] = "User created successfully"
-        
+
         return user_response
     
     except ValueError as e:
@@ -101,20 +146,19 @@ async def get_users(
     - Header: Authorization: Bearer <jwt_token>
     
     Response:
-    - Nếu admin: Email/phone/password được hiển thị đầy đủ
-    - Nếu user role: Email/phone/password được masked
+    - User: Áp dụng masking theo mode trong bảng masking_modes dựa trên role caller
+    - Admin: xem email/phone đã decrypt (password vẫn masked)
     """
     try:
         total, users = await UserCRUD.get_users(db, skip=skip, limit=limit, mask=True)
-        
-        # Role-based response
+
         if current_user.role == "admin":
-            # Admin xem email/phone decrypted, password masked
+            # Admin xem decrypted (password vẫn masked)
             user_responses = [to_user_response_for_admin_decrypted(user) for user in users]
         else:
-            # User xem masked
-            user_responses = [to_user_response(user) for user in users]
-        
+            mode = await MaskingModeCRUD.get_mode_for_role(db, current_user.role)
+            user_responses = [_user_response_with_masking(user, mode) for user in users]
+
         return UserListResponse(
             total=total,
             skip=skip,
@@ -151,8 +195,8 @@ async def get_user(
     - Header: Authorization: Bearer <jwt_token>
     
     Response:
-    - Nếu admin: Email/phone/password được hiển thị đầy đủ (nếu có endpoint decrypt)
-    - Nếu user role: Email/phone/password được masked (default)
+    - User: Masking áp dụng theo mode trong bảng masking_modes dựa trên role caller
+    - Admin: xem email/phone đã decrypt (password vẫn masked)
     """
     try:
         # Get user from database
@@ -161,19 +205,19 @@ async def get_user(
         if not user:
             raise HTTPException(status_code=404, detail=f"User with ID {user_id} not found")
         
-        # Role-based response
         if current_user.role == "admin":
-            # Admin xem email/phone decrypted (bằng master key), password masked
             return to_user_response_for_admin_decrypted(user)
-        else:
-            # User chỉ xem chính mình
-            if current_user.user_id != user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You can only view your own information"
-                )
-            # User xem chính mình - hiển thị masked
-            return to_user_response(user)
+
+        mode = await MaskingModeCRUD.get_mode_for_role(db, current_user.role)
+
+        # User chỉ xem chính mình
+        if current_user.user_id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only view your own information"
+            )
+
+        return _user_response_with_masking(user, mode)
     
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -295,6 +339,51 @@ async def reset_user_password(
         # Return user response với password masked
         return to_user_response_for_admin_decrypted(user)
     
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+# ==================== PATCH /users/masking-mode - Set global masking mode per role ====================
+
+@router.patch(
+    "/masking-mode",
+    response_model=MaskingModeResponse,
+    summary="Set global masking mode (Admin only)",
+    description="Admin set phương thức che dấu dữ liệu cho role trong bảng masking_modes"
+)
+async def set_global_masking_mode(
+    request: MaskingModeRequest,
+    current_user: TokenData = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Admin cấu hình masking mode toàn cục cho một role (user/admin).
+    Thay đổi áp dụng cho tất cả responses (GET users, GET user by id) theo role caller.
+    """
+    try:
+        if current_user.role != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only admin can set masking mode"
+            )
+
+        valid_modes = ["mask", "shuffle", "fake", "noise"]
+        if request.masking_mode not in valid_modes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid masking mode. Valid options: {', '.join(valid_modes)}"
+            )
+
+        record = await MaskingModeCRUD.set_mode_for_role(db, request.role, request.masking_mode)
+
+        return MaskingModeResponse(
+            role=record.role,
+            masking_mode=record.mode,
+            updated_at=record.updated_at,
+        )
+
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

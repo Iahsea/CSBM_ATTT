@@ -5,6 +5,7 @@ Security Module: Encryption & Hashing
 """
 from passlib.context import CryptContext
 import os
+import random
 
 # Bcrypt context cho password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -365,29 +366,111 @@ def mask_password(password: str) -> str:
     return "***"
 
 
-def apply_masking(user_data: dict, mask: bool = True) -> dict:
+def _seeded_shuffle(text: str, seed: int) -> str:
+    """Deterministic shuffle to avoid needing a stored key."""
+    rnd = random.Random(seed)
+    chars = list(text)
+    rnd.shuffle(chars)
+    return "".join(chars)
+
+
+def _seeded_noise(text: str, seed: int, noise_charset: str = "#@!$%^&*+-") -> str:
+    """Insert deterministic noise characters to keep reproducible masking."""
+    if not text:
+        return text
+    rnd = random.Random(seed)
+    out = []
+    for ch in text:
+        out.append(ch)
+        if rnd.random() < 0.4:  # 40% chance to inject noise after a char
+            out.append(rnd.choice(noise_charset))
+    return "".join(out)
+
+
+def shuffle_text(text: str) -> str:
+    """Mask bằng xáo trộn vị trí ký tự (không khôi phục được)."""
+    return _seeded_shuffle(text, simple_hash(text)) if text else text
+
+
+def add_noise(text: str) -> str:
+    """Mask bằng thêm nhiễu (không khôi phục được)."""
+    return _seeded_noise(text, simple_hash(text)) if text else text
+
+
+def fake_email(email: str) -> str:
+    """Thay thế email bằng giá trị giả nhưng cùng cấu trúc cơ bản."""
+    seed = simple_hash(email)
+    rnd = random.Random(seed)
+    user_part = f"user{rnd.randint(1000,9999)}"
+    domain = "example.com"
+    return f"{user_part}@{domain}"
+
+
+def fake_phone(phone: str) -> str:
+    """Thay thế phone bằng dãy số giả cùng độ dài."""
+    digits = ''.join(c for c in phone if c.isdigit()) or "000000"
+    seed = simple_hash(digits)
+    rnd = random.Random(seed)
+    return ''.join(str(rnd.randint(0, 9)) for _ in range(len(digits)))
+
+
+def fake_password(password: str) -> str:
+    """Password giả; luôn ẩn hoàn toàn."""
+    return "***fake***" if password else "***"
+
+
+def apply_masking(user_data: dict, mask: bool = True, mode: str = "mask") -> dict:
     """
-    Áp dụng masking cho user data nếu mask=true.
-    
-    Args:
-        user_data: Dict chứa user info (decrypted)
-        mask: Boolean flag
-        
-    Returns:
-        Dict với dữ liệu đã mask (nếu mask=true)
+    Áp dụng che giấu dữ liệu với nhiều phương pháp.
+    mode: "mask" (che ký tự), "shuffle" (xáo trộn),
+          "fake" (thay bằng dữ liệu giả), "noise" (thêm nhiễu).
     """
     if not mask:
         return user_data
-    
+
+    mode = (mode or "mask").lower()
     masked_data = user_data.copy()
-    
-    if 'email' in masked_data and masked_data['email']:
-        masked_data['email'] = mask_email(masked_data['email'])
-    
-    if 'phone' in masked_data and masked_data['phone']:
-        masked_data['phone'] = mask_phone(masked_data['phone'])
-    
-    if 'password' in masked_data and masked_data['password']:
-        masked_data['password'] = mask_password(masked_data['password'])
-    
+
+    def _mask_email(val: str) -> str:
+        if mode == "mask":
+            return mask_email(val)
+        if mode == "shuffle":
+            return shuffle_text(val)
+        if mode == "fake":
+            return fake_email(val)
+        if mode == "noise":
+            return add_noise(val)
+        return mask_email(val)
+
+    def _mask_phone(val: str) -> str:
+        if mode == "mask":
+            return mask_phone(val)
+        if mode == "shuffle":
+            return shuffle_text(val)
+        if mode == "fake":
+            return fake_phone(val)
+        if mode == "noise":
+            return add_noise(val)
+        return mask_phone(val)
+
+    def _mask_password(val: str) -> str:
+        if mode == "mask":
+            return mask_password(val)
+        if mode == "shuffle":
+            return shuffle_text(val)
+        if mode == "fake":
+            return fake_password(val)
+        if mode == "noise":
+            return add_noise(val)
+        return mask_password(val)
+
+    if "email" in masked_data and masked_data["email"]:
+        masked_data["email"] = _mask_email(masked_data["email"])
+
+    if "phone" in masked_data and masked_data["phone"]:
+        masked_data["phone"] = _mask_phone(masked_data["phone"])
+
+    if "password" in masked_data and masked_data["password"]:
+        masked_data["password"] = _mask_password(masked_data["password"])
+
     return masked_data

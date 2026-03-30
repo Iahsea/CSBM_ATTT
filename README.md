@@ -7,12 +7,14 @@
 ## 📋 Tổng Quan
 
 Backend phục vụ các API cho quản lý người dùng với tính năng:
-- ✅ Mã hóa/giải mã dữ liệu XOR
-- ✅ Che che dữ liệu (email, điện thoại, mật khẩu)
+- ✅ Mã hóa AES-128 ECB với key per-user và master-key
+- ✅ Che che dữ liệu (email, điện thoại, mật khẩu) với 4 phương thức
+- ✅ **Masking Mode Control:** Admin chọn phương thức che dữ liệu cho từng user
 - ✅ Quản lý người dùng (CRUD)
 - ✅ MySQL database
 - ✅ FastAPI async framework
 - ✅ Swagger documentation
+- ✅ JWT Authentication & Authorization
 
 ---
 
@@ -220,22 +222,104 @@ ENV=development
 
 ---
 
+## � Masking Mode Control (Admin Feature)
+
+### Phương Thức Che Che Dữ Liệu
+
+Admin có thể chọn 4 phương thức che che dữ liệu cho từng user:
+
+| Mode | Ví Dụ | Mô Tả |
+|------|-------|-------|
+| **mask** | `j***@gmail.com` | Giữ ký tự đầu/cuối, che phần giữa |
+| **shuffle** | `mliaoag@m.c` | Xáo trộn vị trí ký tự (deterministic) |
+| **fake** | `user5234@example.com` | Thay bằng dữ liệu giả |
+| **noise** | `j#o@h!n*@#$g%m^a&i*l(.c)o%m` | Thêm ký tự nhiễu |
+
+### API: Admin Set Masking Mode
+
+**Endpoint:** `PATCH /users/{user_id}/masking-mode`
+
+**Authorization:** Admin only
+
+**Request:**
+```bash
+curl -X PATCH http://localhost:8000/users/3/masking-mode \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"masking_mode": "shuffle"}'
+```
+
+**Valid modes:** `mask | shuffle | fake | noise`
+
+### API: User Views Masked Data
+
+**Endpoint:** `GET /users/{user_id}`
+
+```bash
+curl -X GET http://localhost:8000/users/3 \
+  -H "Authorization: Bearer <user_token>"
+
+# Response: Email/phone displayed with stored masking_mode
+{
+  "email": "mliaoag@m.c",    # Masked with 'shuffle' mode
+  "phone": "1840299765",     # Masked with 'shuffle' mode
+  "masking_mode": "shuffle"
+}
+```
+
+### Override Masking Mode (Query Parameter)
+
+```bash
+curl -X GET "http://localhost:8000/users/3?mask_mode=fake" \
+  -H "Authorization: Bearer <user_token>"
+
+# Response: Data masked with 'fake' instead of stored 'shuffle'
+{
+  "email": "user5234@example.com",   # Overridden to 'fake'
+  "phone": "9876543210",              # Overridden to 'fake'
+  "masking_mode": "shuffle"           # Stored mode unchanged
+}
+```
+
+### Database Migration
+
+Chạy migration để add `masking_mode` column:
+
+```bash
+# Windows
+mysql -u root -p123456 < migrations/add_masking_mode.sql
+
+# Mac/Linux
+mysql -u root -p123456 < migrations/add_masking_mode.sql
+```
+
+### Documentation
+
+Xem [MASKING_MODE_GUIDE.md](MASKING_MODE_GUIDE.md) để chi tiết đầy đủ.
+
+---
+
 ## 🔒 Bảo Mật
 
-### Mã Hóa XOR
-- **Key Generation:** `simple_hash(username + password)`
-- **Algorithm:** XOR bit-by-bit với key
+### Mã Hóa AES-128 ECB
+- **Master Key:** Dùng để mã hóa email/phone (từ biến môi trường `MASTER_KEY_SEED`)
+- **Per-User Key:** Dùng để mã hóa password (từ username + password)
+- **Algorithm:** AES-128 ECB (custom implementation)
 - **Storage:** LONGBLOB trong MySQL
 
-### Che Che Dữ Liệu (Masking)
-- **Email:** `a***@domain.com`
-- **Phone:** `xx****yy` (hiển thị 2 chữ số đầu + 2 chữ số cuối)
-- **Password:** `***` (luôn được che)
+### Che Che Dữ liệu (Masking)
+- **Email:** Áp dụng masking mode (mask/shuffle/fake/noise)
+- **Phone:** Áp dụng masking mode
+- **Password:** Luôn được che (***), user không thể view
+
+### Access Control
+- **Admin:** Luôn thấy dữ liệu decrypt (không bị mask)
+- **Regular User:** Thấy dữ liệu mask theo masking_mode được set
+- **User cannot override:** Masking mode do admin control, user không thể thay đổi
 
 ### Query Parameters
 ```bash
-?mask=true   # Che che dữ liệu nhạy cảm (mặc định)
-?mask=false  # Hiển thị dữ liệu plaintext (cần caution)
+?mask_mode=shuffle  # Override masking mode (test purpose)
 ```
 
 ---

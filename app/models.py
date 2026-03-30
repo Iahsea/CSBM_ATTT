@@ -174,3 +174,22 @@ class User(Base):
             result["password"] = "***"
         
         return result
+
+
+class MaskingMode(Base):
+    """
+    Global masking mode configuration per role.
+
+    Only admin can update this to change how data is masked for all users of a role.
+    """
+
+    __tablename__ = "masking_modes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    role = Column(String(50), unique=True, nullable=False, comment="Role name (admin, user)")
+    mode = Column(String(20), nullable=False, default="mask", comment="mask|shuffle|fake|noise")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<MaskingMode(role='{self.role}', mode='{self.mode}')>"

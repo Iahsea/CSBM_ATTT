@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
-from .models import User, Role
+from .models import User, Role, MaskingMode
 from .schemas import UserCreate, UserUpdate
 from .security import (
     encrypt,
@@ -117,6 +117,43 @@ class RoleCRUD:
         query = select(Role).where(Role.name == name)
         result = await db.execute(query)
         return result.scalar_one_or_none()
+
+
+class MaskingModeCRUD:
+    """CRUD operations cho global masking mode (per role)."""
+
+    @staticmethod
+    async def get_mode_for_role(db: AsyncSession, role_name: str) -> str:
+        """Return masking mode for a role, create default 'mask' if missing."""
+        query = select(MaskingMode).where(MaskingMode.role == role_name)
+        result = await db.execute(query)
+        record = result.scalar_one_or_none()
+
+        if not record:
+            record = MaskingMode(role=role_name, mode="mask")
+            db.add(record)
+            await db.commit()
+            await db.refresh(record)
+
+        return record.mode
+
+    @staticmethod
+    async def set_mode_for_role(db: AsyncSession, role_name: str, mode: str) -> MaskingMode:
+        """Upsert masking mode for a role."""
+        query = select(MaskingMode).where(MaskingMode.role == role_name)
+        result = await db.execute(query)
+        record = result.scalar_one_or_none()
+
+        if not record:
+            record = MaskingMode(role=role_name, mode=mode, created_at=datetime.utcnow(), updated_at=datetime.utcnow())
+        else:
+            record.mode = mode
+            record.updated_at = datetime.utcnow()
+
+        db.add(record)
+        await db.commit()
+        await db.refresh(record)
+        return record
 
 
 class UserCRUD:
@@ -409,7 +446,7 @@ def decrypt_user_data(user: User, username: str, password: str) -> dict:
     }
 
 
-def get_user_response(user: User, decrypted_data: dict = None, mask: bool = True) -> dict:
+def get_user_response(user: User, decrypted_data: dict = None, mask: bool = True, mask_mode: str = "mask") -> dict:
     """
     Get user response (merged model + decrypted data + masking).
     
@@ -422,11 +459,11 @@ def get_user_response(user: User, decrypted_data: dict = None, mask: bool = True
         dict: User response
     """
     user_data = user.to_dict(decrypted_data)
-    masked_data = apply_masking(user_data, mask=mask)
+    masked_data = apply_masking(user_data, mask=mask, mode=mask_mode)
     return masked_data
 
 
-def get_role_based_response(user: User, decrypted_data: dict = None, current_role: str = "user") -> dict:
+def get_role_based_response(user: User, decrypted_data: dict = None, current_role: str = "user", mask_mode: str = "mask") -> dict:
     """
     Get user response dựa vào role của current user.
     
@@ -444,7 +481,7 @@ def get_role_based_response(user: User, decrypted_data: dict = None, current_rol
     """
     # Admin xem full, user xem masked
     should_mask = (current_role != "admin")
-    return get_user_response(user, decrypted_data, mask=should_mask)
+    return get_user_response(user, decrypted_data, mask=should_mask, mask_mode=mask_mode)
 
 
 def get_role_based_response_from_model(user: User, current_role: str = "user") -> dict:
@@ -777,73 +814,3 @@ async def migrate_user_to_master_key(db: AsyncSession, user: User, username: str
 
     return changed
 
-
-def get_user_response(user: User, decrypted_data: dict = None, mask: bool = True) -> dict:
-    """
-    Get user response (merged model + decrypted data + masking).
-    
-    Args:
-        user: User model instance
-        decrypted_data: Dict with decrypted email/phone/password
-        mask: Áp dụng masking hay không
-    
-    Returns:
-        dict: User response
-    """
-    user_data = user.to_dict(decrypted_data)
-    masked_data = apply_masking(user_data, mask=mask)
-    return masked_data
-
-
-def get_role_based_response(user: User, decrypted_data: dict = None, current_role: str = "user") -> dict:
-    """
-    Get user response dựa vào role của current user.
-    
-    Args:
-        user: User model instance
-        decrypted_data: Dict with decrypted email/phone/password
-        current_role: Role của current user (user/admin)
-    
-    Returns:
-        dict: User response (admin xem full, user xem masked)
-    
-    Logic:
-    - admin: Xem full dữ liệu (không mask)
-    - user: Xem bị mask
-    """
-    # Admin xem full, user xem masked
-    should_mask = (current_role != "admin")
-    return get_user_response(user, decrypted_data, mask=should_mask)
-
-
-def get_role_based_response_from_model(user: User, current_role: str = "user") -> dict:
-    """
-    Get user response từ User model (encrypted data).
-    Dùng cho GET endpoints không decrypt.
-    
-    Vì data được encrypt, ta không thể decrypt để xem full.
-    Admin cũng chỉ thấy masked pattern như user role (vì không có password để decrypt).
-    
-    Args:
-        user: User model instance (có encrypted data)
-        current_role: Role của current user (user/admin)
-    
-    Returns:
-        dict: User response (all masked pattern)
-    
-    Note: 
-    - Không thể decrypt nên both admin & user thấy masked pattern
-    - Nếu admin muốn xem full, cần endpoint riêng /users/{id}/details
-      với current admin user auth để decrypt
-    """
-    # Vì không có password để decrypt, ta trả về masked pattern cho all
-    return {
-        "id": user.id,
-        "username": user.username,
-        "email": "***@***",           # Cannot decrypt without password
-        "phone": "****",              # Cannot decrypt without password
-        "password": "***",            # Always masked
-        "role": user.role,
-        "created_at": user.created_at.isoformat() if user.created_at else None,
-        "updated_at": user.updated_at.isoformat() if user.updated_at else None
-    }
