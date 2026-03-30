@@ -5,7 +5,6 @@ Security Module: Encryption & Hashing
 """
 from passlib.context import CryptContext
 import os
-import random
 
 # Bcrypt context cho password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -366,24 +365,37 @@ def mask_password(password: str) -> str:
     return "***"
 
 
+def _prng_next(state: list) -> int:
+    """Pseudorandom generator (LCG) without stdlib random."""
+    # next = (a * prev + c) mod m, using glibc-like constants
+    state[0] = (state[0] * 1103515245 + 12345) & 0x7FFFFFFF
+    return state[0]
+
+
 def _seeded_shuffle(text: str, seed: int) -> str:
-    """Deterministic shuffle to avoid needing a stored key."""
-    rnd = random.Random(seed)
+    """Deterministic shuffle (Fisher-Yates) using LCG."""
+    if not text:
+        return text
     chars = list(text)
-    rnd.shuffle(chars)
+    state = [seed]
+    for i in range(len(chars) - 1, 0, -1):
+        j = _prng_next(state) % (i + 1)
+        chars[i], chars[j] = chars[j], chars[i]
     return "".join(chars)
 
 
 def _seeded_noise(text: str, seed: int, noise_charset: str = "#@!$%^&*+-") -> str:
-    """Insert deterministic noise characters to keep reproducible masking."""
+    """Insert deterministic noise characters using LCG (no stdlib random)."""
     if not text:
         return text
-    rnd = random.Random(seed)
+    state = [seed]
     out = []
     for ch in text:
         out.append(ch)
-        if rnd.random() < 0.4:  # 40% chance to inject noise after a char
-            out.append(rnd.choice(noise_charset))
+        rand_norm = (_prng_next(state) & 0xFFFF) / 65536.0
+        if rand_norm < 0.4:  # 40% chance to inject noise
+            idx = _prng_next(state) % len(noise_charset)
+            out.append(noise_charset[idx])
     return "".join(out)
 
 
@@ -398,20 +410,21 @@ def add_noise(text: str) -> str:
 
 
 def fake_email(email: str) -> str:
-    """Thay thế email bằng giá trị giả nhưng cùng cấu trúc cơ bản."""
+    """Thay thế email bằng giá trị giả nhưng cùng cấu trúc cơ bản (LCG)."""
     seed = simple_hash(email)
-    rnd = random.Random(seed)
-    user_part = f"user{rnd.randint(1000,9999)}"
+    state = [seed]
+    rand_num = (_prng_next(state) % 9000) + 1000  # 1000-9999
+    user_part = f"user{rand_num}"
     domain = "example.com"
     return f"{user_part}@{domain}"
 
 
 def fake_phone(phone: str) -> str:
-    """Thay thế phone bằng dãy số giả cùng độ dài."""
+    """Thay thế phone bằng dãy số giả cùng độ dài (LCG)."""
     digits = ''.join(c for c in phone if c.isdigit()) or "000000"
     seed = simple_hash(digits)
-    rnd = random.Random(seed)
-    return ''.join(str(rnd.randint(0, 9)) for _ in range(len(digits)))
+    state = [seed]
+    return ''.join(str(_prng_next(state) % 10) for _ in range(len(digits)))
 
 
 def fake_password(password: str) -> str:
