@@ -1,599 +1,491 @@
-# 🌐 API Endpoints
-## Tài liệu các endpoint RESTful của hệ thống
+# API Endpoints
+## Tai lieu API day du cho Frontend (cap nhat theo code hien tai)
 
 ---
 
-## 📋 Mục lục
+## Muc luc
 
-1. [Tổng quan](#tổng-quan)
-2. [Tạo User - POST /users](#tạo-user---post-users)
-3. [Lấy danh sách Users - GET /users](#lấy-danh-sách-users---get-users)
-4. [Lấy User theo ID - GET /users/{id}](#lấy-user-theo-id---get-usersid)
-5. [Cập nhật User - PUT /users/{id}](#cập-nhật-user---put-usersid)
-6. [Xóa User - DELETE /users/{id}](#xóa-user---delete-usersid)
-7. [Response Codes](#response-codes)
-8. [Ví dụ cURL](#ví-dụ-curl)
-9. [Ví dụ Python](#ví-dụ-python)
+1. [Tong quan](#tong-quan)
+2. [Luu y quan trong ve URL thuc te](#luu-y-quan-trong-ve-url-thuc-te)
+3. [Auth](#auth)
+4. [System](#system)
+5. [Users](#users)
+6. [Masking mode](#masking-mode)
+7. [Ma tran phan quyen](#ma-tran-phan-quyen)
+8. [Response codes](#response-codes)
+9. [Mau tich hop frontend](#mau-tich-hop-frontend)
 
 ---
 
-## 📊 Tổng quan
+## Tong quan
 
-### Base URL
-```
-http://localhost:8000/api
+### Server URL
+
+```text
+http://localhost:8000
 ```
 
-### Content-Type
+### API Docs
+
+```text
+http://localhost:8000/docs
 ```
-application/json
+
+### OpenAPI JSON
+
+```text
+http://localhost:8000/openapi.json
 ```
 
 ### Authentication
-- Hiện tại: **Không yêu cầu** (Basic)
-- Tương lai: JWT Token (Authorization: Bearer {token})
 
-### Endpoints Summary
+- API su dung JWT Bearer token.
+- Header:
 
-| Phương thức | Endpoint | Mục đích |
-|-----------|----------|---------|
-| POST | `/users` | Tạo user mới |
-| GET | `/users` | Lấy danh sách users |
-| GET | `/users/{id}` | Lấy user theo ID |
-| PUT | `/users/{id}` | Cập nhật user |
-| DELETE | `/users/{id}` | Xóa user |
-
----
-
-## 🆕 Tạo User - POST /users
-
-### Endpoint
-```
-POST /api/users
-```
-
-### Request Headers
-```
-Content-Type: application/json
-```
-
-### Request Body (JSON Schema)
-
-```json
-{
-  "username": "string (required, 3-50 chars, unique)",
-  "email": "string (required, valid email format)",
-  "phone": "string (required, 10-15 digits)",
-  "password": "string (required, min 6 chars)"
-}
-```
-
-### Request Parameters
-
-| Tham số | Type | Bắt buộc | Mô tả | Ví dụ |
-|--------|------|---------|-------|-------|
-| `username` | string | YES | Tên đăng nhập, duy nhất | `john_doe` |
-| `email` | string | YES | Email hợp lệ | `john@gmail.com` |
-| `phone` | string | YES | Số điện thoại | `0987654321` |
-| `password` | string | YES | Mật khẩu tối thiểu 6 ký tự | `SecurePass123` |
-
-### Response Success (201 Created)
-
-```json
-{
-  "id": 1,
-  "username": "john_doe",
-  "email": "j***@gmail.com",
-  "phone": "09****21",
-  "message": "User created successfully",
-  "created_at": "2026-03-28T10:30:45"
-}
-```
-
-### Response Error - Duplicate Username (400 Bad Request)
-
-```json
-{
-  "error": "Username already exists",
-  "detail": "Username 'john_doe' is already taken"
-}
-```
-
-### Response Error - Invalid Email (400 Bad Request)
-
-```json
-{
-  "error": "Invalid email format",
-  "detail": "Email must be a valid email address"
-}
-```
-
-### Response Error - Phone Format (400 Bad Request)
-
-```json
-{
-  "error": "Invalid phone format",
-  "detail": "Phone must contain 10-15 digits"
-}
-```
-
-### Response Error - Weak Password (400 Bad Request)
-
-```json
-{
-  "error": "Weak password",
-  "detail": "Password must be at least 6 characters"
-}
-```
-
-### Validation Logic
-
-```python
-# Validation
-├─ Username
-│  ├─ Length: 3-50 characters
-│  ├─ Pattern: alphanumeric + underscore
-│  ├─ Unique: Check database
-│  └─ Error: 400 Bad Request
-│
-├─ Email
-│  ├─ Format: RFC 5322
-│  ├─ Example: user@domain.com
-│  └─ Error: 400 Bad Request
-│
-├─ Phone
-│  ├─ Length: 10-15 digits
-│  ├─ Pattern: digits only (0-9) or +country code
-│  └─ Error: 400 Bad Request
-│
-└─ Password
-   ├─ Length: minimum 6 characters
-   ├─ Note: No complexity requirement
-   └─ Error: 400 Bad Request
+```http
+Authorization: Bearer <access_token>
 ```
 
 ---
 
-## 📖 Lấy danh sách Users - GET /users
+## Luu y quan trong ve URL thuc te
 
-### Endpoint
-```
-GET /api/users?mask=true&skip=0&limit=10
-```
+Do router dang co `prefix` o ca `include_router(...)` va ben trong tung router, endpoint thuc te hien tai la:
 
-### Query Parameters
+- Auth base: `/api/auth/auth`
+- Users base: `/api/users/users`
 
-| Tham số | Type | Mặc định | Mô tả |
-|--------|------|---------|-------|
-| `mask` | boolean | `true` | Áp dụng masking hay không |
-| `skip` | integer | `0` | Số record bỏ qua (pagination) |
-| `limit` | integer | `10` | Số record trả về (max 100) |
+Frontend can goi theo cac URL thuc te ben duoi cho den khi backend chuan hoa lai prefix.
 
-### Request Headers
-```
-Accept: application/json
-```
+---
 
-### Response Success (200 OK) - với mask=true
+## Auth
+
+### 1) Login
+
+- Method: `POST`
+- URL (thuc te): `/api/auth/auth/login`
+- Auth: khong can token
+
+Request body:
 
 ```json
 {
-  "total": 3,
-  "skip": 0,
-  "limit": 10,
-  "items": [
-    {
-      "id": 1,
-      "username": "john_doe",
-      "email": "j***@gmail.com",
-      "phone": "09****21",
-      "password": "***",
-      "created_at": "2026-03-28T10:30:45"
-    },
-    {
-      "id": 2,
-      "username": "alice_smith",
-      "email": "a***@yahoo.com",
-      "phone": "08****45",
-      "password": "***",
-      "created_at": "2026-03-28T11:00:00"
-    },
-    {
-      "id": 3,
-      "username": "bob_wilson",
-      "email": "b***@outlook.com",
-      "phone": "07****78",
-      "password": "***",
-      "created_at": "2026-03-28T11:15:30"
-    }
-  ]
+  "username": "admin",
+  "password": "123456"
 }
 ```
 
-### Response Success (200 OK) - với mask=false
+Response `200`:
 
 ```json
 {
-  "total": 3,
-  "skip": 0,
-  "limit": 10,
-  "items": [
-    {
-      "id": 1,
-      "username": "john_doe",
-      "email": "john@gmail.com",
-      "phone": "0987654321",
-      "password": "SecurePass123",
-      "created_at": "2026-03-28T10:30:45"
-    },
-    {
-      "id": 2,
-      "username": "alice_smith",
-      "email": "alice@yahoo.com",
-      "phone": "0823456745",
-      "password": "AlicePass456",
-      "created_at": "2026-03-28T11:00:00"
-    },
-    {
-      "id": 3,
-      "username": "bob_wilson",
-      "email": "bob@outlook.com",
-      "phone": "0734567878",
-      "password": "BobPass789",
-      "created_at": "2026-03-28T11:15:30"
-    }
-  ]
+  "access_token": "<jwt_token>",
+  "token_type": "bearer",
+  "user_id": 1,
+  "username": "admin",
+  "role": "admin"
 }
 ```
 
-### Response Error - Not Found (404)
+Loi thuong gap:
+
+- `401`: `Invalid username or password`
+- `500`: `Internal server error: ...`
+
+---
+
+## System
+
+### 1) Root
+
+- Method: `GET`
+- URL: `/`
+- Auth: khong can token
+
+Response `200`:
 
 ```json
 {
-  "error": "No users found",
-  "detail": "Database is empty"
+  "message": "Data Masking + Encryption Backend",
+  "version": "1.0.0",
+  "status": "running",
+  "docs": "/docs",
+  "redoc": "/redoc"
+}
+```
+
+### 2) Health check
+
+- Method: `GET`
+- URL: `/health`
+- Auth: khong can token
+
+Response `200`:
+
+```json
+{
+  "status": "healthy",
+  "message": "Server is running"
 }
 ```
 
 ---
 
-## 🔍 Lấy User theo ID - GET /users/{id}
+## Users
 
-### Endpoint
-```
-GET /api/users/{id}?mask=true
-```
+Base URL thuc te: `/api/users/users`
 
-### Path Parameters
+### 1) Tao user
 
-| Tham số | Type | Mô tả |
-|--------|------|-------|
-| `id` | integer | User ID (required) |
+- Method: `POST`
+- URL: `/api/users/users`
+- Auth: khong can token
 
-### Query Parameters
-
-| Tham số | Type | Mặc định | Mô tả |
-|--------|------|---------|-------|
-| `mask` | boolean | `true` | Áp dụng masking hay không |
-
-### Example Requests
-```
-GET /api/users/1?mask=true
-GET /api/users/2?mask=false
-```
-
-### Response Success (200 OK) - với mask=true
+Request body:
 
 ```json
 {
-  "id": 1,
-  "username": "john_doe",
-  "email": "j***@gmail.com",
-  "phone": "09****21",
-  "password": "***",
-  "created_at": "2026-03-28T10:30:45",
-  "updated_at": "2026-03-28T10:30:45"
-}
-```
-
-### Response Success (200 OK) - với mask=false
-
-```json
-{
-  "id": 1,
   "username": "john_doe",
   "email": "john@gmail.com",
   "phone": "0987654321",
   "password": "SecurePass123",
-  "created_at": "2026-03-28T10:30:45",
-  "updated_at": "2026-03-28T10:30:45"
+  "role": "user"
 }
 ```
 
-### Response Error - User Not Found (404)
+Ghi chu:
+
+- `role` khong bat buoc, mac dinh la `user`.
+- Du lieu nhay cam duoc ma hoa truoc khi luu.
+
+Response `201`:
 
 ```json
 {
-  "error": "User not found",
-  "detail": "User with ID 999 does not exist"
+  "id": 3,
+  "username": "john_doe",
+  "email": "j***@gmail.com",
+  "phone": "09****21",
+  "password": "***",
+  "message": "User created successfully",
+  "created_at": "2026-03-31T10:30:45"
 }
 ```
 
-### Response Error - Invalid ID (400)
+### 2) Lay danh sach users
+
+- Method: `GET`
+- URL: `/api/users/users`
+- Auth: can Bearer token
+
+Query params:
+
+- `skip` (int, default `0`, min `0`)
+- `limit` (int, default `10`, min `1`, max `100`)
+
+Ghi chu:
+
+- User role: du lieu tra ve bi masking theo mode global cua role caller.
+- Admin role: xem email/phone da decrypt (password van masked).
+
+Response `200`:
 
 ```json
 {
-  "error": "Invalid ID format",
-  "detail": "ID must be an integer"
+  "total": 2,
+  "skip": 0,
+  "limit": 10,
+  "items": [
+    {
+      "id": 3,
+      "username": "john_doe",
+      "email": "j***@gmail.com",
+      "phone": "09****21",
+      "password": "***",
+      "role": "user",
+      "created_at": "2026-03-31T10:30:45",
+      "updated_at": "2026-03-31T10:30:45"
+    }
+  ]
 }
 ```
 
----
+### 3) Lay user theo ID
 
-## ✏️ Cập nhật User - PUT /users/{id}
+- Method: `GET`
+- URL: `/api/users/users/{user_id}`
+- Auth: can Bearer token
 
-### Endpoint
-```
-PUT /api/users/{id}
-```
+Ghi chu:
 
-### Path Parameters
+- Admin: xem duoc moi user.
+- User: chi xem duoc chinh minh (`current_user.user_id == user_id`).
 
-| Tham số | Type | Mô tả |
-|--------|------|-------|
-| `id` | integer | User ID (required) |
-
-### Request Body (JSON Schema)
+Response `200`:
 
 ```json
 {
-  "email": "string (optional, valid email)",
-  "phone": "string (optional, 10-15 digits)",
-  "password": "string (optional, min 6 chars)"
+  "id": 3,
+  "username": "john_doe",
+  "email": "j***@gmail.com",
+  "phone": "09****21",
+  "password": "***",
+  "role": "user",
+  "created_at": "2026-03-31T10:30:45",
+  "updated_at": "2026-03-31T10:30:45"
 }
 ```
 
-**Lưu ý**: 
-- `username` không được phép thay đổi
-- Chỉ cần cập nhật fields cần thiết
+Loi thuong gap:
 
-### Request Example
+- `403`: `You can only view your own information`
+- `404`: `User with ID {id} not found`
+
+### 4) Xem thong tin decrypted day du
+
+- Method: `POST`
+- URL: `/api/users/users/{user_id}/decrypt-info`
+- Auth: can Bearer token
+
+Request body:
+
+```json
+{
+  "password": "password_cua_user_do"
+}
+```
+
+Ghi chu:
+
+- Admin hoac chinh user moi duoc goi.
+- API tra ve email/phone/password da decrypt, khong masking.
+
+Response `200`:
+
+```json
+{
+  "id": 3,
+  "username": "john_doe",
+  "email": "john@gmail.com",
+  "phone": "0987654321",
+  "password": "SecurePass123",
+  "role": "user",
+  "created_at": "2026-03-31T10:30:45",
+  "updated_at": "2026-03-31T10:30:45"
+}
+```
+
+### 5) Reset password user (admin only)
+
+- Method: `POST`
+- URL: `/api/users/users/{user_id}/reset-password`
+- Auth: can Bearer token (admin)
+
+Request body:
+
+```json
+{
+  "new_password": "NewPassword123"
+}
+```
+
+Response `200`:
+
+```json
+{
+  "id": 3,
+  "username": "john_doe",
+  "email": "john@gmail.com",
+  "phone": "0987654321",
+  "password": "***",
+  "role": "user",
+  "created_at": "2026-03-31T10:30:45",
+  "updated_at": "2026-03-31T11:00:00"
+}
+```
+
+Loi thuong gap:
+
+- `403`: `Only admin can reset password`
+
+### 6) Cap nhat user
+
+- Method: `PUT`
+- URL: `/api/users/users/{user_id}`
+- Auth: can Bearer token
+
+Request body (tat ca optional):
 
 ```json
 {
   "email": "john.new@gmail.com",
-  "phone": "0912345678"
+  "phone": "0912345678",
+  "password": "NewPassword123",
+  "old_password": "OldPassword123"
 }
 ```
 
-### Response Success (200 OK)
+Ghi chu:
+
+- User chi cap nhat duoc chinh minh.
+- Admin cap nhat duoc moi user.
+- Neu doi `password` thi can `old_password`.
+
+Response `200`:
 
 ```json
 {
-  "id": 1,
+  "id": 3,
   "username": "john_doe",
   "email": "j***@gmail.com",
   "phone": "09****78",
   "message": "User updated successfully",
-  "updated_at": "2026-03-28T14:30:45"
+  "updated_at": "2026-03-31T11:10:00"
 }
 ```
 
-### Response Error - User Not Found (404)
+### 7) Xoa user (admin only)
+
+- Method: `DELETE`
+- URL: `/api/users/users/{user_id}`
+- Auth: can Bearer token (admin)
+
+Response `200`:
 
 ```json
 {
-  "error": "User not found",
-  "detail": "User with ID 999 does not exist"
-}
-```
-
-### Response Error - Invalid Email (400)
-
-```json
-{
-  "error": "Invalid email format",
-  "detail": "Email must be a valid email address"
-}
-```
-
----
-
-## 🗑️ Xóa User - DELETE /users/{id}
-
-### Endpoint
-```
-DELETE /api/users/{id}
-```
-
-### Path Parameters
-
-| Tham số | Type | Mô tả |
-|--------|------|-------|
-| `id` | integer | User ID (required) |
-
-### Response Success (200 OK)
-
-```json
-{
-  "id": 1,
+  "id": 3,
   "username": "john_doe",
   "message": "User deleted successfully"
 }
 ```
 
-### Response Error - User Not Found (404)
+Loi thuong gap:
+
+- `403`: `Admin access required`
+- `404`: `User with ID {id} not found`
+
+---
+
+## Masking mode
+
+### 1) Set global masking mode theo role (admin only)
+
+- Method: `PATCH`
+- URL: `/api/users/users/masking-mode`
+- Auth: can Bearer token (admin)
+
+Request body:
 
 ```json
 {
-  "error": "User not found",
-  "detail": "User with ID 999 does not exist"
+  "role": "user",
+  "masking_mode": "shuffle"
 }
 ```
 
----
+Gia tri hop le cua `masking_mode`:
 
-## 📈 Response Codes
+- `mask`
+- `shuffle`
+- `fake`
+- `noise`
 
-| Status Code | HTTP Status | Mô tả |
-|------------|------------|-------|
-| 200 | OK | Request thành công |
-| 201 | Created | Tạo resource thành công |
-| 400 | Bad Request | Input không hợp lệ |
-| 404 | Not Found | Resource không tồn tại |
-| 500 | Internal Server Error | Lỗi server |
+Response `200`:
 
----
-
-## 🐚 Ví dụ cURL
-
-### Tạo User
-```bash
-curl -X POST http://localhost:8000/api/users \
-  -H "Content-Type: application/json" \
-  -d '{
-    "username": "john_doe",
-    "email": "john@gmail.com",
-    "phone": "0987654321",
-    "password": "SecurePass123"
-  }'
-```
-
-### Lấy danh sách Users (có masking)
-```bash
-curl -X GET "http://localhost:8000/api/users?mask=true&limit=10"
-```
-
-### Lấy danh sách Users (không masking)
-```bash
-curl -X GET "http://localhost:8000/api/users?mask=false&limit=10"
-```
-
-### Lấy User theo ID
-```bash
-curl -X GET "http://localhost:8000/api/users/1?mask=true"
-```
-
-### Cập nhật User
-```bash
-curl -X PUT http://localhost:8000/api/users/1 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "john.new@gmail.com",
-    "phone": "0912345678"
-  }'
-```
-
-### Xóa User
-```bash
-curl -X DELETE http://localhost:8000/api/users/1
-```
-
----
-
-## 🐍 Ví dụ Python
-
-### Cài đặt requests library
-```bash
-pip install requests
-```
-
-### Tạo User
-```python
-import requests
-
-url = "http://localhost:8000/api/users"
-data = {
-    "username": "john_doe",
-    "email": "john@gmail.com",
-    "phone": "0987654321",
-    "password": "SecurePass123"
+```json
+{
+  "role": "user",
+  "masking_mode": "shuffle",
+  "updated_at": "2026-03-31T11:20:00"
 }
-
-response = requests.post(url, json=data)
-print(response.status_code)  # 201
-print(response.json())
 ```
 
-### Lấy danh sách Users
-```python
-import requests
+Loi thuong gap:
 
-url = "http://localhost:8000/api/users"
-params = {"mask": True, "limit": 10}
-
-response = requests.get(url, params=params)
-users = response.json()
-for user in users["items"]:
-    print(f"{user['id']}: {user['username']} - {user['email']}")
-```
-
-### Lấy User theo ID
-```python
-import requests
-
-user_id = 1
-url = f"http://localhost:8000/api/users/{user_id}"
-params = {"mask": True}
-
-response = requests.get(url, params=params)
-user = response.json()
-print(user)
-```
-
-### Cập nhật User
-```python
-import requests
-
-user_id = 1
-url = f"http://localhost:8000/api/users/{user_id}"
-data = {
-    "email": "john.new@gmail.com",
-    "phone": "0912345678"
-}
-
-response = requests.put(url, json=data)
-print(response.json())
-```
-
-### Xóa User
-```python
-import requests
-
-user_id = 1
-url = f"http://localhost:8000/api/users/{user_id}"
-
-response = requests.delete(url)
-print(response.json())
-```
+- `400`: `Invalid masking mode. Valid options: mask, shuffle, fake, noise`
+- `403`: `Only admin can set masking mode`
 
 ---
 
-##  Luồng Masking trong API
+## Ma tran phan quyen
 
+| Endpoint | User | Admin | Khong login |
+|---|---|---|---|
+| POST `/api/auth/auth/login` | ✅ | ✅ | ✅ |
+| GET `/` | ✅ | ✅ | ✅ |
+| GET `/health` | ✅ | ✅ | ✅ |
+| POST `/api/users/users` | ✅ | ✅ | ✅ |
+| GET `/api/users/users` | ✅ | ✅ | ❌ |
+| GET `/api/users/users/{id}` | Chi chinh minh | ✅ | ❌ |
+| POST `/api/users/users/{id}/decrypt-info` | Chi chinh minh | ✅ | ❌ |
+| PUT `/api/users/users/{id}` | Chi chinh minh | ✅ | ❌ |
+| DELETE `/api/users/users/{id}` | ❌ | ✅ | ❌ |
+| POST `/api/users/users/{id}/reset-password` | ❌ | ✅ | ❌ |
+| PATCH `/api/users/users/masking-mode` | ❌ | ✅ | ❌ |
+
+---
+
+## Response codes
+
+| Status | Y nghia |
+|---|---|
+| `200` | OK |
+| `201` | Created |
+| `400` | Bad Request |
+| `401` | Unauthorized (token sai/thieu) |
+| `403` | Forbidden (khong du quyen) |
+| `404` | Not Found |
+| `422` | Validation Error (FastAPI/Pydantic) |
+| `500` | Internal Server Error |
+
+---
+
+## Mau tich hop frontend
+
+### 1) Dang nhap va luu token
+
+```javascript
+const loginRes = await fetch("http://localhost:8000/api/auth/auth/login", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ username, password })
+});
+
+const loginData = await loginRes.json();
+localStorage.setItem("access_token", loginData.access_token);
 ```
-Client Request: GET /users?mask=true
 
-Server Processing:
-  1. Fetch data từ DB (encrypted)
-  2. Decrypt data (XOR)
-  3. Check mask=true?
-     ├─ YES: Apply masking rules
-     │  ├─ email: a***@domain.com
-     │  ├─ phone: 09****21
-     │  └─ password: ***
-     └─ NO: Return plain decrypted data
+### 2) Goi API can auth
 
-Response:
-  {
-    "email": "j***@gmail.com",      ← Masked
-    "phone": "09****21",            ← Masked
-    "password": "***"               ← Masked
+```javascript
+const token = localStorage.getItem("access_token");
+
+const res = await fetch("http://localhost:8000/api/users/users?skip=0&limit=10", {
+  headers: {
+    "Authorization": `Bearer ${token}`
   }
+});
+
+const data = await res.json();
+```
+
+### 3) Set masking mode (admin)
+
+```javascript
+await fetch("http://localhost:8000/api/users/users/masking-mode", {
+  method: "PATCH",
+  headers: {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${token}`
+  },
+  body: JSON.stringify({ role: "user", masking_mode: "fake" })
+});
 ```
 
 ---
 
-**Phiên bản**: 1.0  
-**Ngày cập nhật**: 28/03/2026  
-**Liên quan**: [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md), [DATA_MASKING.md](./DATA_MASKING.md)
+**Version**: 2.0  
+**Updated**: 31/03/2026  
+**Source of truth**: Swagger (`/docs`) + router code (`app/routers/*.py`)
