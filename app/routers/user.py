@@ -272,6 +272,13 @@ async def view_decrypted_user_info(
         # Decrypt user data với password được cung cấp
         decrypted_data = decrypt_user_data(user, user.username, request.password)
         
+        # Kiểm tra password có đúng không
+        if not decrypted_data.get("password") or decrypted_data.get("password") != request.password:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid password. Cannot decrypt user data."
+            )
+        
         # Get full response (không mask)
         user_response = get_user_response(user, decrypted_data, mask=False)
         
@@ -279,6 +286,8 @@ async def view_decrypted_user_info(
     
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
