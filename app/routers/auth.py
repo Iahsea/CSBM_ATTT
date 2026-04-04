@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from ..database import get_db
 from ..models import User
-from ..crud import UserCRUD, migrate_user_to_master_key
+from ..crud import UserCRUD
 from ..security import verify_password, encrypt, decrypt, generate_key
 from ..jwt_config import create_access_token, TokenData
 
@@ -109,13 +109,6 @@ async def login(
                 detail="Invalid username or password"
             )
         
-        # Sau khi verify password thành công, migrate email/phone về master key (nếu còn dạng cũ)
-        try:
-            await migrate_user_to_master_key(db, db_user, request.username, request.password)
-        except Exception:
-            # Không chặn login nếu migrate lỗi; chỉ log ra console
-            print("[WARN] Migrate to master key failed for user", request.username)
-
         # Tạo JWT token (dùng role name từ relationship object)
         access_token = create_access_token(
             username=db_user.username,

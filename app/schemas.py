@@ -85,12 +85,18 @@ class ResetPasswordRequest(BaseModel):
     """
     Schema cho request reset password (POST /users/{id}/reset-password)
     Admin reset password mới cho user - chỉ admin có quyền
+    Vì email/phone được encrypt bằng per-user key (username + new password),
+    nên admin phải cung cấp email/phone mới để re-encrypt
     """
     new_password: str = Field(..., min_length=6, description="New password (minimum 6 chars)")
+    email: Optional[EmailStr] = Field(None, description="New email (optional - keep old if not provided)")
+    phone: Optional[str] = Field(None, min_length=10, max_length=15, description="New phone (optional - keep old if not provided)")
 
     class Config:
         example = {
-            "new_password": "NewPassword123"
+            "new_password": "NewPassword123",
+            "email": "user.new@gmail.com",
+            "phone": "0912345678"
         }
 
 

@@ -3,7 +3,7 @@ CRUD Operations: Create, Read, Update, Delete
 Quản lý database operations
 """
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from .models import User, Role, MaskingMode
@@ -15,7 +15,6 @@ from .security import (
     apply_masking,
     mask_email,
     mask_phone,
-    get_master_key,
 )
 from datetime import datetime
 import base64
@@ -76,34 +75,6 @@ def to_user_response_for_admin(user: User) -> dict:
         "updated_at": user.updated_at.isoformat() if user.updated_at else None
     }
 
-
-def to_user_response_for_admin_decrypted(user: User) -> dict:
-    """
-    Convert User model to response dict for admin view (with decrypted email/phone).
-    Admin xem email/phone decrypted (bằng master key), password luôn masked.
-    
-    Args:
-        user: User model instance (với eager-loaded role relationship)
-    
-    Returns:
-        dict: User response với email/phone decrypted, password masked
-    """
-    master_key = get_master_key()
-    
-    # Decrypt email/phone bằng master key
-    decrypted_email = decrypt(user.email, master_key) if user.email else ""
-    decrypted_phone = decrypt(user.phone, master_key) if user.phone else ""
-    
-    return {
-        "id": user.id,
-        "username": user.username,
-        "email": decrypted_email,           # Decrypted via master key
-        "phone": decrypted_phone,           # Decrypted via master key
-        "password": "***",                  # Always masked
-        "role": user.role.name if user.role else "user",
-        "created_at": user.created_at.isoformat() if user.created_at else None,
-        "updated_at": user.updated_at.isoformat() if user.updated_at else None
-    }
 
 
 class RoleCRUD:
@@ -166,6 +137,9 @@ class UserCRUD:
         """
         Tạo user mới với encryption.
         
+        Tất cả sensitive data (email, phone, password) được encrypt bằng per-user key (username + password).
+        Điều này đảm bảo mỗi user có key riêng và admin cũng không thể xem email/phone của user khác.
+        
         Args:
             db: Database session
             user: UserCreate schema
@@ -177,7 +151,6 @@ class UserCRUD:
             ValueError: Nếu duplicate username hoặc role không tồn tại
         """
         try:
-            # Get role by name
             role_query = select(Role).where(Role.name == user.role)
             role_result = await db.execute(role_query)
             db_role = role_result.scalar_one_or_none()
@@ -185,33 +158,27 @@ class UserCRUD:
             if not db_role:
                 raise ValueError(f"Role '{user.role}' does not exist")
             
-            # Generate keys
+            # Dùng per-user key cho tất cả sensitive data
             per_user_key = generate_key(user.username, user.password)
-            master_key = get_master_key()
             
-            # Encrypt sensitive fields
-            encrypted_email = encrypt(user.email, master_key)
-            encrypted_phone = encrypt(user.phone, master_key)
+            encrypted_email = encrypt(user.email, per_user_key)
+            encrypted_phone = encrypt(user.phone, per_user_key)
             encrypted_password = encrypt(user.password, per_user_key)
             
-            # Create user instance
             db_user = User(
                 username=user.username,
                 email=encrypted_email,
                 phone=encrypted_phone,
                 password=encrypted_password,
-                role_id=db_role.id,  # Use role_id instead of role
+                role_id=db_role.id,
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow()
             )
-            
-            # Save to database
+
             db.add(db_user)
             await db.commit()
-            
-            # Refresh with role relationship loaded
+
             await db.refresh(db_user)
-            # Need to reload with selectinload to avoid greenlet issue
             query = select(User).where(User.id == db_user.id).options(selectinload(User.role))
             result = await db.execute(query)
             db_user = result.scalar_one_or_none()
@@ -267,7 +234,15 @@ class UserCRUD:
 
 
     @staticmethod
-    async def get_users(db: AsyncSession, skip: int = 0, limit: int = 10, mask: bool = True) -> tuple:
+    async def get_users(
+        db: AsyncSession,
+        skip: int = 0,
+        limit: int = 10,
+        mask: bool = True,
+        *,
+        only_user_id: int | None = None,
+        exclude_role_names: list[str] | None = None,
+    ) -> tuple:
         """
         Lấy danh sách users với pagination (không decrypt - return encrypted).
         
@@ -280,93 +255,30 @@ class UserCRUD:
         Returns:
             (total_count, users_list)
         """
-        # Get total count
-        count_query = select(User)
+        role_excludes = [r for r in (exclude_role_names or []) if r]
+
+        count_query = select(func.count(User.id)).select_from(User)
+        if role_excludes:
+            count_query = count_query.join(Role).where(~Role.name.in_(role_excludes))
+        if only_user_id is not None:
+            count_query = count_query.where(User.id == only_user_id)
+
         count_result = await db.execute(count_query)
-        total = len(count_result.all())
-        
-        # Get paginated users
-        query = select(User).offset(skip).limit(limit).options(selectinload(User.role))
+        total = int(count_result.scalar() or 0)
+
+        query = select(User).options(selectinload(User.role))
+        if role_excludes:
+            query = query.join(Role).where(~Role.name.in_(role_excludes))
+        if only_user_id is not None:
+            query = query.where(User.id == only_user_id)
+
+        query = query.offset(skip).limit(limit)
         result = await db.execute(query)
         users = result.scalars().all()
-        
+
         return total, users
 
 
-    @staticmethod
-    async def update_user(db: AsyncSession, user_id: int, user_update: UserUpdate, username: str, old_password: str = None) -> User:
-        """
-        Cập nhật user với re-encryption.
-        
-        Args:
-            db: Database session
-            user_id: User ID
-            user_update: UserUpdate schema
-            username: Username (để sinh key)
-            old_password: Old password (để decrypt dữ liệu cũ, required nếu update password)
-        
-        Returns:
-            Updated User model instance
-        
-        Raises:
-            ValueError: Nếu user không tồn tại hoặc password sai
-        """
-        query = select(User).where(User.id == user_id)
-        result = await db.execute(query)
-        db_user = result.scalar_one_or_none()
-        
-        if not db_user:
-            raise ValueError(f"User with ID {user_id} does not exist")
-        
-        master_key = get_master_key()
-        
-        # Nếu update password, cần verify old_password
-        if user_update.password:
-            if not old_password:
-                raise ValueError("old_password is required to update password")
-            
-            # Verify old password using per-user key
-            old_key = generate_key(username, old_password)
-            try:
-                decrypted_old_password = decrypt(db_user.password, old_key)
-            except Exception:
-                raise ValueError("Invalid old password")
-            
-            if decrypted_old_password != old_password:
-                raise ValueError("Invalid old password")
-            
-            # Update password với new per-user key
-            new_key = generate_key(username, user_update.password)
-            db_user.password = encrypt(user_update.password, new_key)
-            
-            # Ensure email/phone are stored with master key (migrate if needed)
-            if db_user.email:
-                try:
-                    decrypted_email = decrypt(db_user.email, master_key)
-                except Exception:
-                    decrypted_email = decrypt(db_user.email, old_key)
-                db_user.email = encrypt(decrypted_email, master_key)
-            
-            if db_user.phone:
-                try:
-                    decrypted_phone = decrypt(db_user.phone, master_key)
-                except Exception:
-                    decrypted_phone = decrypt(db_user.phone, old_key)
-                db_user.phone = encrypt(decrypted_phone, master_key)
-        else:
-            # Không update password
-            if user_update.email:
-                db_user.email = encrypt(user_update.email, master_key)
-            if user_update.phone:
-                db_user.phone = encrypt(user_update.phone, master_key)
-        
-        db_user.updated_at = datetime.utcnow()
-        
-        db.add(db_user)
-        await db.commit()
-        await db.refresh(db_user)
-        
-        return db_user
 
 
     @staticmethod
@@ -434,6 +346,7 @@ def decrypt_user_data(user: User, username: str, password: str) -> dict:
         dict: User data (decrypted)
     """
     key = generate_key(username, password)
+    print("Generated key for decryption:", key)  # Debug log
     
     decrypted_email = decrypt(user.email, key) if user.email else None
     decrypted_phone = decrypt(user.phone, key) if user.phone else None
@@ -721,96 +634,4 @@ def _decrypt_and_mask_user(user: User, username: str, password: str, mask: bool 
     return user_response
 
 
-def decrypt_user_data(user: User, username: str, password: str) -> dict:
-    """
-    Decrypt user data với username + password.
-    
-    Args:
-        user: User model instance
-        username: Username
-        password: Password (plain text)
-    
-    Returns:
-        dict: User data (decrypted)
-    """
-    master_key = get_master_key()
-    per_user_key = generate_key(username, password)
-    
-    # Email/phone ưu tiên decrypt bằng master key (dữ liệu mới).
-    # Nếu fail/ra chuỗi không hợp lệ, fallback per-user key để phục vụ migration.
-    def _safe_decrypt(data: bytes, primary_key: bytes, fallback_key: bytes) -> str | None:
-        if not data:
-            return None
-        try:
-            return decrypt(data, primary_key)
-        except Exception:
-            try:
-                return decrypt(data, fallback_key)
-            except Exception:
-                return None
-    
-    decrypted_email = _safe_decrypt(user.email, master_key, per_user_key)
-    decrypted_phone = _safe_decrypt(user.phone, master_key, per_user_key)
-    decrypted_password = decrypt(user.password, per_user_key) if user.password else None
-    
-    return {
-        "email": decrypted_email,
-        "phone": decrypted_phone,
-        "password": decrypted_password
-    }
-
-
-async def migrate_user_to_master_key(db: AsyncSession, user: User, username: str, password: str) -> bool:
-    """
-    Re-encrypt email/phone bằng master key. Cần password để lấy per-user key
-    nếu dữ liệu còn dạng cũ.
-    Trả về True nếu có thay đổi.
-    """
-    master_key = get_master_key()
-    per_user_key = generate_key(username, password)
-
-    def looks_like_email(value: str | None) -> bool:
-        return bool(value) and "@" in value
-
-    def looks_like_phone(value: str | None) -> bool:
-        if not value:
-            return False
-        digits = ''.join(c for c in value if c.isdigit() or c == '+')
-        return len(digits) >= 4
-
-    changed = False
-
-    # Try decrypt with master key first
-    try:
-        email_master = decrypt(user.email, master_key) if user.email else None
-        phone_master = decrypt(user.phone, master_key) if user.phone else None
-    except Exception:
-        email_master = None
-        phone_master = None
-
-    already_master = looks_like_email(email_master) or looks_like_phone(phone_master)
-    if already_master:
-        return False
-
-    # Fallback decrypt with per-user key
-    try:
-        email_old = decrypt(user.email, per_user_key) if user.email else None
-        phone_old = decrypt(user.phone, per_user_key) if user.phone else None
-    except Exception:
-        email_old = None
-        phone_old = None
-
-    if email_old:
-        user.email = encrypt(email_old, master_key)
-        changed = True
-    if phone_old:
-        user.phone = encrypt(phone_old, master_key)
-        changed = True
-
-    if changed:
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
-
-    return changed
 

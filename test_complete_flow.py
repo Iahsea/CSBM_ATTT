@@ -20,12 +20,25 @@ USER_CREDS = {
     "password": "SecurePass123"
 }
 
+AUDITOR_CREDS = {
+    "username": "audit_viewer",
+    "password": "AuditPass123"
+}
+
 NEW_USER = {
     "username": "jane_smith",
     "email": "jane@gmail.com",
     "phone": "0912345678",
     "password": "JanePass123",
     "role": "user"
+}
+
+AUDITOR_USER = {
+    "username": AUDITOR_CREDS["username"],
+    "email": "audit@gmail.com",
+    "phone": "0900000000",
+    "password": AUDITOR_CREDS["password"],
+    "role": "auditor",
 }
 
 # ==================== Helper Functions ====================
@@ -118,6 +131,23 @@ def test_4_login_user():
     return None
 
 
+def test_4b_login_auditor():
+    """Test 4b: Login as auditor"""
+    print_section("TEST 4b: Login as Auditor")
+
+    response = requests.post(
+        f"{BASE_URL}/auth/login",
+        json=AUDITOR_CREDS
+    )
+    print_response(response, "Auditor Login")
+
+    if response.status_code == 200:
+        token = response.json()["access_token"]
+        print(f"✅ Auditor Token: {token[:50]}...\n")
+        return token
+    return None
+
+
 def test_5_get_users_list(token: str, label: str):
     """Test 5: Get users list"""
     print_section(f"TEST 5: Get Users List ({label})")
@@ -134,6 +164,27 @@ def test_5_get_users_list(token: str, label: str):
     return response.status_code == 200
 
 
+def test_5b_auditor_list_excludes_admin(token: str) -> bool:
+    """Auditor can list users but must not see admin."""
+    print_section("TEST 5b: Auditor List Excludes Admin")
+
+    response = requests.get(
+        f"{BASE_URL}/users",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    print_response(response, "Get Users (Auditor)")
+
+    if response.status_code != 200:
+        return False
+
+    roles = [u.get("role") for u in response.json().get("items", [])]
+    if "admin" in roles:
+        print("❌ Auditor list contains admin user\n")
+        return False
+    print("✅ Auditor list does not contain admin\n")
+    return True
+
+
 def test_6_get_user_by_id(token: str, user_id: int, label: str):
     """Test 6: Get user by ID"""
     print_section(f"TEST 6: Get User by ID ({label})")
@@ -144,6 +195,30 @@ def test_6_get_user_by_id(token: str, user_id: int, label: str):
     )
     print_response(response, f"Get User {user_id} ({label})")
     return response.status_code == 200
+
+
+def test_6b_user_cannot_view_other_user(token: str, user_id: int) -> bool:
+    """User role should not be able to view other users."""
+    print_section("TEST 6b: User Cannot View Other User")
+
+    response = requests.get(
+        f"{BASE_URL}/users/{user_id}",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    print_response(response, f"Get User {user_id} (User)")
+    return response.status_code == 403
+
+
+def test_6c_auditor_cannot_view_admin(token: str, admin_user_id: int) -> bool:
+    """Auditor role must not be able to view admin."""
+    print_section("TEST 6c: Auditor Cannot View Admin")
+
+    response = requests.get(
+        f"{BASE_URL}/users/{admin_user_id}",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    print_response(response, f"Get User {admin_user_id} (Auditor)")
+    return response.status_code == 403
 
 
 def test_7_create_another_user(token: str):
@@ -264,20 +339,34 @@ def run_all_tests():
     # Test 1: Create users
     results["Create Admin"] = test_1_create_admin()
     results["Create User"] = test_2_create_user()
+
+    # Create auditor user (new role)
+    print_section("TEST 2b: Create Auditor")
+    response = requests.post(
+        f"{BASE_URL}/users",
+        json=AUDITOR_USER
+    )
+    print_response(response, "Create Auditor")
+    results["Create Auditor"] = response.status_code == 201
     
     # Test 3-4: Login
     admin_token = test_3_login_admin()
     user_token = test_4_login_user()
+    auditor_token = test_4b_login_auditor()
     
-    if not admin_token or not user_token:
+    if not admin_token or not user_token or not auditor_token:
         print("❌ Login failed. Stopping tests.")
         return results
     
     # Test 5-6: Get users
     results["Get Users (Admin)"] = test_5_get_users_list(admin_token, "Admin")
     results["Get Users (User)"] = test_5_get_users_list(user_token, "User")
+    results["Get Users (Auditor)"] = test_5_get_users_list(auditor_token, "Auditor")
+    results["Auditor List Excludes Admin"] = test_5b_auditor_list_excludes_admin(auditor_token)
     results["Get User by ID (Admin)"] = test_6_get_user_by_id(admin_token, 1, "Admin")
-    results["Get User by ID (User)"] = test_6_get_user_by_id(user_token, 1, "User")
+    results["User Cannot View Admin"] = test_6b_user_cannot_view_other_user(user_token, 1)
+    results["Auditor Cannot View Admin"] = test_6c_auditor_cannot_view_admin(auditor_token, 1)
+    results["Get User by ID (Auditor)"] = test_6_get_user_by_id(auditor_token, 2, "Auditor")
     
     # Test 7: Create another user
     new_user_id = test_7_create_another_user(admin_token)

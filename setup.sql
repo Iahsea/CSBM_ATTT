@@ -35,7 +35,8 @@ INSERT INTO roles
     (name, description)
 VALUES
     ('admin', 'Administrator - full access'),
-    ('user', 'Regular user - limited access');
+    ('user', 'Regular user - limited access'),
+    ('auditor', 'Can view masked data of all non-admin users');
 
 -- Tạo bảng users
 CREATE TABLE

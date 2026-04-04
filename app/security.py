@@ -9,9 +9,20 @@ import os
 # Bcrypt context cho password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Master Key cho decrypt email/phone (cho admin xem được)
-# Sử dụng env var hoặc default value
-MASTER_KEY_SEED = os.getenv("MASTER_KEY_SEED", "csat_bmpt_master_key_2026")
+# NOTE: Per-User Encryption Strategy
+# ======================================
+# Tất cả sensitive data (email, phone, password) được encrypt bằng per-user key
+# Per-user key được sinh từ: username + password
+# 
+# Ưu điểm:
+# - Mỗi user có key riêng => Admin cũng không thể xem email/phone của user khác
+# - Tăng tính bảo mật cho từng user
+#
+# Hạn chế:
+# - Khi user thay password, email/phone cần được re-encrypt với new key
+# - Admin cũng không thể decrypt email/phone (trừ chính admin user của admin)
+#
+# KHÔNG còn dùng MASTER_KEY nữa (loại bỏ MASTER_KEY_SEED)
 
 
 # =====================================================
@@ -81,6 +92,23 @@ def _key_expansion(key: bytes) -> list[bytes]:
     return [bytes(w[i * 16 : (i + 1) * 16]) for i in range(11)]
 
 
+def _decrypt_block(block: bytes, round_keys: list[bytes]) -> bytes:
+    state = bytearray(block)
+    _add_round_key(state, round_keys[10])
+    for r in range(9, 0, -1):
+        _inv_shift_rows(state)
+        _inv_sub_bytes(state)
+        _add_round_key(state, round_keys[r])
+        _inv_mix_columns(state)
+    _inv_shift_rows(state)
+    _inv_sub_bytes(state)
+    _add_round_key(state, round_keys[0])
+    return bytes(state)
+
+def _add_round_key(state: bytearray, rk: bytes) -> None:
+    for i in range(16):
+        state[i] ^= rk[i]
+
 def _sub_bytes(state: bytearray) -> None:
     for i in range(16):
         state[i] = SBOX[state[i]]
@@ -103,15 +131,6 @@ def _inv_shift_rows(s: bytearray) -> None:
     s[3], s[7], s[11], s[15] = s[7], s[11], s[15], s[3]
 
 
-def _mix_columns(s: bytearray) -> None:
-    for i in range(0, 16, 4):
-        c0, c1, c2, c3 = s[i : i + 4]
-        s[i] = _xtime(c0) ^ (_xtime(c1) ^ c1) ^ c2 ^ c3
-        s[i + 1] = c0 ^ _xtime(c1) ^ (_xtime(c2) ^ c2) ^ c3
-        s[i + 2] = c0 ^ c1 ^ _xtime(c2) ^ (_xtime(c3) ^ c3)
-        s[i + 3] = (_xtime(c0) ^ c0) ^ c1 ^ c2 ^ _xtime(c3)
-
-
 def _inv_mix_columns(s: bytearray) -> None:
     for i in range(0, 16, 4):
         c0, c1, c2, c3 = s[i : i + 4]
@@ -121,9 +140,15 @@ def _inv_mix_columns(s: bytearray) -> None:
         s[i + 3] = _mul_gf(c0, 0x0B) ^ _mul_gf(c1, 0x0D) ^ _mul_gf(c2, 0x09) ^ _mul_gf(c3, 0x0E)
 
 
-def _add_round_key(state: bytearray, rk: bytes) -> None:
-    for i in range(16):
-        state[i] ^= rk[i]
+def _mix_columns(s: bytearray) -> None:
+    for i in range(0, 16, 4):
+        c0, c1, c2, c3 = s[i : i + 4]
+        s[i] = _xtime(c0) ^ (_xtime(c1) ^ c1) ^ c2 ^ c3
+        s[i + 1] = c0 ^ _xtime(c1) ^ (_xtime(c2) ^ c2) ^ c3
+        s[i + 2] = c0 ^ c1 ^ _xtime(c2) ^ (_xtime(c3) ^ c3)
+        s[i + 3] = (_xtime(c0) ^ c0) ^ c1 ^ c2 ^ _xtime(c3)
+
+
 
 
 def _encrypt_block(block: bytes, round_keys: list[bytes]) -> bytes:
@@ -140,18 +165,7 @@ def _encrypt_block(block: bytes, round_keys: list[bytes]) -> bytes:
     return bytes(state)
 
 
-def _decrypt_block(block: bytes, round_keys: list[bytes]) -> bytes:
-    state = bytearray(block)
-    _add_round_key(state, round_keys[10])
-    for r in range(9, 0, -1):
-        _inv_shift_rows(state)
-        _inv_sub_bytes(state)
-        _add_round_key(state, round_keys[r])
-        _inv_mix_columns(state)
-    _inv_shift_rows(state)
-    _inv_sub_bytes(state)
-    _add_round_key(state, round_keys[0])
-    return bytes(state)
+
 
 
 def _pkcs7_pad(data: bytes) -> bytes:
@@ -282,13 +296,24 @@ def decrypt(encrypted_data: bytes, key: str | bytes | int) -> str:
 
 
 def generate_key(username: str, password: str) -> bytes:
-    """Sinh secret key 16 byte từ username + password (pad/truncate)."""
+    """
+    Sinh secret key 16 byte từ username + password.
+    
+    Key này được dùng để encrypt/decrypt tất cả sensitive data (email, phone, password).
+    Mỗi user có key riêng => Admin không thể xem email/phone của user khác.
+    
+    Args:
+        username: Username của user
+        password: Password plain text của user
+    
+    Returns:
+        bytes: 16-byte key (padded or truncated từ username + password)
+    
+    Note:
+        - Khi user thay password, email/phone cần re-encrypt với new key
+        - Không sử dụng MASTER_KEY nữa
+    """
     return _normalize_key(username + password)
-
-
-def get_master_key() -> bytes:
-    """Master key 16 byte lấy từ env để admin decrypt email/phone."""
-    return _normalize_key(MASTER_KEY_SEED)
 
 # Masking Functions
 def mask_email(email: str) -> str:
